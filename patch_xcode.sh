@@ -1,94 +1,121 @@
 #!/bin/bash
 
-# Script để tự động chuyển đổi phiên bản Xcode (LastUpgradeCheck) cho project
-# Dựa trên phiên bản Xcode đang cài đặt trên máy
+# Script để tự động chuyển đổi phiên bản Xcode (LastUpgradeCheck) cho nhiều project trong 1 thư mục
 
-# 1. Nhận đường dẫn project
-if [ -z "$1" ]; then
-    read -p "Vui lòng nhập đường dẫn đến thư mục project hoặc file .xcodeproj: " PROJECT_PATH
-else
-    PROJECT_PATH="$1"
-fi
-
-# Loại bỏ khoảng trắng hoặc nháy kép nếu người dùng kéo thả thư mục vào Terminal
-PROJECT_PATH=$(echo "$PROJECT_PATH" | sed -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//')
-
-if [ -z "$PROJECT_PATH" ] || [ ! -d "$PROJECT_PATH" ]; then
-    echo "❌ Lỗi: Đường dẫn không hợp lệ hoặc thư mục không tồn tại!"
-    exit 1
-fi
-
-# 2. Xác định file project.pbxproj
-if [[ "$PROJECT_PATH" == *.xcodeproj ]]; then
-    PBXPROJ_PATH="$PROJECT_PATH/project.pbxproj"
-else
-    # Tìm thư mục .xcodeproj trong đường dẫn cung cấp
-    XCODEPROJ_DIR=$(find "$PROJECT_PATH" -maxdepth 1 -name "*.xcodeproj" | head -n 1)
-    if [ -z "$XCODEPROJ_DIR" ]; then
-        echo "❌ Lỗi: Không tìm thấy file .xcodeproj nào trong thư mục $PROJECT_PATH"
-        exit 1
+# Tiền xử lý: Tách các đường dẫn bị dính liền do shell gộp chuỗi (ví dụ: /Users/a/Users/b)
+NEW_ARGS=""
+for arg in "$@"; do
+    if [[ "$arg" == *"/Users/"* ]]; then
+        arg=$(echo "$arg" | sed 's#/Users/# /Users/#g')
     fi
-    PBXPROJ_PATH="$XCODEPROJ_DIR/project.pbxproj"
+    NEW_ARGS="$NEW_ARGS $arg"
+done
+eval "set -- $NEW_ARGS"
+
+# 1. Nhận đường dẫn
+if [ $# -eq 0 ]; then
+    read -p "Vui lòng nhập đường dẫn đến thư mục chứa các project: " RAW_INPUT
+    # Chuẩn hóa nếu người dùng copy paste nhiều đường dẫn dính nhau kiểu '/a''/b' hoặc "/a""/b"
+    RAW_INPUT=$(echo "$RAW_INPUT" | sed -e "s/''/' '/g" -e 's/""/" "/g')
+    eval "set -- $RAW_INPUT"
 fi
 
-if [ ! -f "$PBXPROJ_PATH" ]; then
-    echo "❌ Lỗi: Không tìm thấy file cấu hình tại $PBXPROJ_PATH"
+if [ $# -eq 0 ]; then
+    echo "Lỗi: Bạn chưa nhập đường dẫn nào!"
     exit 1
 fi
 
-echo "🔍 Đang xử lý file: $PBXPROJ_PATH"
-
-# 3. Lấy phiên bản Xcode hiện tại trên máy
+# 2. Lấy phiên bản Xcode hiện tại trên máy
 XCODE_VERSION=$(xcodebuild -version | grep "Xcode" | awk '{print $2}')
 if [ -z "$XCODE_VERSION" ]; then
-    echo "❌ Lỗi: Không thể lấy được phiên bản Xcode. Đảm bảo bạn đã cài đặt Xcode và xcode-select."
+    echo "Lỗi: Không thể lấy được phiên bản Xcode. Đảm bảo bạn đã cài đặt Xcode."
     exit 1
 fi
-echo "✅ Phiên bản Xcode hiện tại trên máy: $XCODE_VERSION"
 
-# 4. Chuyển đổi thành số mã hoá (LastUpgradeCheck) và các tham số khác
-# Ví dụ: 13.4.1 -> Major: 13, Minor: 4 -> 1340
-# Ví dụ: 15.0 -> Major: 15, Minor: 0 -> 1500
 MAJOR=$(echo "$XCODE_VERSION" | cut -d. -f1)
 MINOR=$(echo "$XCODE_VERSION" | cut -d. -f2)
-
-if [ -z "$MINOR" ]; then
-    MINOR="0"
-fi
+if [ -z "$MINOR" ]; then MINOR="0"; fi
 
 UPGRADE_CODE="${MAJOR}${MINOR}0"
 
-# Xác định objectVersion dựa trên Major version
-if [ "$MAJOR" -ge 15 ]; then
-    OBJECT_VERSION="58"
-elif [ "$MAJOR" -ge 14 ]; then
-    OBJECT_VERSION="56"
-elif [ "$MAJOR" -ge 13 ]; then
-    OBJECT_VERSION="55"
-elif [ "$MAJOR" -ge 12 ]; then
-    OBJECT_VERSION="54"
-else
-    OBJECT_VERSION="53"
+# Xác định objectVersion lớn nhất mà Xcode hiện tại hỗ trợ
+if [ "$MAJOR" -ge 15 ]; then OBJECT_VERSION="58"
+elif [ "$MAJOR" -ge 14 ]; then OBJECT_VERSION="56"
+elif [ "$MAJOR" -ge 13 ]; then OBJECT_VERSION="55"
+elif [ "$MAJOR" -ge 12 ]; then OBJECT_VERSION="54"
+else OBJECT_VERSION="53"
 fi
 
 COMPAT_VERSION="Xcode ${MAJOR}.0"
 
-echo "✅ Mã định danh (LastUpgradeCheck) tương ứng: $UPGRADE_CODE"
-echo "✅ Object Version: $OBJECT_VERSION"
-echo "✅ Compatibility Version: $COMPAT_VERSION"
+echo "Phiên bản Xcode hiện tại: $XCODE_VERSION (ObjectVersion hỗ trợ: <= $OBJECT_VERSION)"
+echo "---------------------------------------------------"
 
-# 5. Cập nhật file project.pbxproj
-# Sao lưu file gốc trước khi sửa
-cp "$PBXPROJ_PATH" "${PBXPROJ_PATH}.bak"
+# 3. Lặp qua tất cả các đường dẫn cung cấp
+for ROOT_PATH in "$@"; do
+    ROOT_PATH=$(echo "$ROOT_PATH" | sed -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//')
+    
+    if [ -z "$ROOT_PATH" ] || [ ! -d "$ROOT_PATH" ]; then
+        # Chỉ báo lỗi nếu chuỗi nhập vào giống như 1 đường dẫn (có chứa dấu /)
+        # Nếu là các từ ngẫu nhiên (ví dụ copy nhầm prompt) thì sẽ bỏ qua trong im lặng
+        if [[ "$ROOT_PATH" == *"/"* ]]; then
+            echo "Lỗi: Đường dẫn không hợp lệ hoặc thư mục không tồn tại: $ROOT_PATH"
+            echo "---------------------------------------------------"
+        fi
+        continue
+    fi
+    
+    echo "ĐANG QUÉT THƯ MỤC: $ROOT_PATH"
 
-# Dùng sed để thay thế giá trị LastUpgradeCheck (hỗ trợ trên macOS)
-sed -i '' -E "s/LastUpgradeCheck = [0-9]{4,};/LastUpgradeCheck = $UPGRADE_CODE;/g" "$PBXPROJ_PATH"
+    # Tìm tất cả các file .xcodeproj trong thư mục
+    FIND_OUTPUT=$(find "$ROOT_PATH" -type d -name "*.xcodeproj" -exec dirname {} \;)
+    if [ -z "$FIND_OUTPUT" ]; then
+        echo "Không tìm thấy project Xcode nào trong thư mục này."
+        echo "---------------------------------------------------"
+        continue
+    fi
 
-# Cập nhật objectVersion
-sed -i '' -E "s/objectVersion = [0-9]+;/objectVersion = $OBJECT_VERSION;/g" "$PBXPROJ_PATH"
+    # Loại bỏ các dòng trùng lặp (nếu có nhiều file .xcodeproj trong cùng 1 thư mục cha)
+    UNIQUE_DIRS=$(echo "$FIND_OUTPUT" | sort | uniq -c)
 
-# Cập nhật compatibilityVersion
-sed -i '' -E "s/compatibilityVersion = \"Xcode [0-9]+\.[0-9]+\";/compatibilityVersion = \"$COMPAT_VERSION\";/g" "$PBXPROJ_PATH"
+    echo "$UNIQUE_DIRS" | while read -r count dir; do
+        if [ "$count" -gt 1 ]; then
+            echo "BỎ QUA: Thư mục '$dir' có chứa $count file .xcodeproj (nhiều hơn 1 file ở cùng vị trí). Không an toàn để xử lý!"
+            echo "---------------------------------------------------"
+            continue
+        fi
+        
+        # Lấy đường dẫn file pbxproj
+        XCODEPROJ_DIR=$(find "$dir" -maxdepth 1 -type d -name "*.xcodeproj" | head -n 1)
+        PBXPROJ_PATH="$XCODEPROJ_DIR/project.pbxproj"
+        
+        if [ ! -f "$PBXPROJ_PATH" ]; then
+            continue
+        fi
+        
+        # Kiểm tra objectVersion của project
+        CURRENT_OBJ_VER=$(grep -oE "objectVersion = [0-9]+" "$PBXPROJ_PATH" | head -n 1 | awk '{print $3}')
+        
+        if [ -n "$CURRENT_OBJ_VER" ] && [ "$CURRENT_OBJ_VER" -le "$OBJECT_VERSION" ]; then
+            echo "BỎ QUA: '$XCODEPROJ_DIR' - Project này (objectVersion: $CURRENT_OBJ_VER) đã đủ điều kiện chạy trên Xcode $XCODE_VERSION."
+            echo "---------------------------------------------------"
+            continue
+        fi
+        
+        echo "ĐANG XỬ LÝ: '$XCODEPROJ_DIR'"
+        echo "   - Cập nhật objectVersion ($CURRENT_OBJ_VER -> $OBJECT_VERSION)"
+        
+        # Sao lưu file gốc trước khi sửa
+        cp "$PBXPROJ_PATH" "${PBXPROJ_PATH}.bak"
 
-echo "🎉 Thành công! Đã chuyển đổi dự án để tương thích với Xcode $XCODE_VERSION (Mã: $UPGRADE_CODE)."
-echo "💡 (File dự phòng đã được lưu tại: ${PBXPROJ_PATH}.bak)"
+        # Thay đổi các thông số
+        sed -i '' -E "s/LastUpgradeCheck = [0-9]{4,};/LastUpgradeCheck = $UPGRADE_CODE;/g" "$PBXPROJ_PATH"
+        sed -i '' -E "s/objectVersion = [0-9]+;/objectVersion = $OBJECT_VERSION;/g" "$PBXPROJ_PATH"
+        sed -i '' -E "s/compatibilityVersion = \"Xcode [0-9]+\.[0-9]+\";/compatibilityVersion = \"$COMPAT_VERSION\";/g" "$PBXPROJ_PATH"
+        
+        echo " Hoàn tất vá lỗi dự án này!"
+        echo "---------------------------------------------------"
+    done
+done
+
+echo "TẤT CẢ HOÀN TẤT!"
