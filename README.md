@@ -1,6 +1,6 @@
 # Xcode Project Patch
 
-Bộ công cụ này cung cấp các script (bash) giúp giải quyết lỗi "cannot be opened because it is in a future Xcode project file format" khi mở các dự án Xcode mới trên phiên bản Xcode cũ hơn.
+Đoạn code này cung cấp các script (bash) giúp giải quyết lỗi "cannot be opened because it is in a future Xcode project file format" khi mở các dự án Xcode mới trên phiên bản Xcode cũ hơn.
 
 ## Các chức năng chính
 - **`patch_xcode.sh`**: Tự động nhận diện phiên bản Xcode hiện tại trên máy, sau đó chuyển đổi cấu trúc file project (`LastUpgradeCheck`, `objectVersion`, `compatibilityVersion`) để tương thích. Script tự động tạo bản sao lưu (`.bak`) trước khi sửa.
